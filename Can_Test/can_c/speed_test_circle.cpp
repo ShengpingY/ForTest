@@ -4,6 +4,7 @@
 #include <string.h>
 #include <iomanip>
 #include <iostream>
+#include <mutex>
 
 #include <net/if.h>
 #include <sys/types.h>
@@ -28,6 +29,7 @@ private:
     int s_read;
     struct sockaddr_can addr_read;
     struct ifreq ifr_read;
+    std::mutex mutex_;
 
 
 
@@ -146,16 +148,16 @@ public:
                 perror("CAN Frame read error!");
                 return -1;
             }
-            printf("Received CAN Frame -> CANID: 0x%X Data: ", frame_rotate_read.can_id &= ~CAN_EFF_FLAG);
-            for (int i = 0; i < frame_rotate_read.can_dlc; i++) {
-                printf("%02X ", frame_rotate_read.data[i]);
-            }
-            printf("\n");
+            // printf("Received CAN Frame -> CANID: 0x%X Data: ", frame_rotate_read.can_id &= ~CAN_EFF_FLAG);
+            // for (int i = 0; i < frame_rotate_read.can_dlc; i++) {
+            //     printf("%02X ", frame_rotate_read.data[i]);
+            // }
+            // printf("\n");
 
             // tranfer 32bit data to float number
             f_num = UnsignedCharToFloat_32(frame_rotate_read.data[3],frame_rotate_read.data[2],frame_rotate_read.data[1],frame_rotate_read.data[0]);
             
-            printf("transfered float value is :%f \n", f_num);
+            // printf("transfered float value is :%f \n", f_num);
         }
         return f_num;
     }
@@ -194,18 +196,20 @@ public:
     }
 
 
-
 };
 
-void thread1_read(int canid,CanController CanController)
+void thread1_read(int canid,CanController& canController1)
 {
     while(1)
     {
-        CanController.wheel_velocity = canController.readonce_2_float(canid);
+        float temp = canController1.readonce_2_float(canid);
+        canController1.wheel_velocity = temp;
+        printf("%f ",temp);
+        std::this_thread::sleep_for(std::chrono::microseconds(500));
     }
 }
 
-void thread2_updatespeed(CanController CanController)
+void thread2_updatespeed(CanController& canController)
 {
     Keyboard::initTermios();// initialize keyboard
     float radius = 3;
@@ -229,9 +233,9 @@ void thread2_updatespeed(CanController CanController)
     canController.setRotateVelocity(can_id_rtt_5, velocity_rtt);
     canController.setRotateVelocity(can_id_rtt_6, velocity_rtt);
     canController.setRotateVelocity(can_id_rtt_7, velocity_rtt);
-    canController.setPosition(can_id_rtp_5, position_rtt);
-    canController.setPosition(can_id_rtp_6, position_rtt);
-    canController.setPosition(can_id_rtp_7, position_rtt);
+    // canController.setPosition(can_id_rtp_5, position_rtt);
+    // canController.setPosition(can_id_rtp_6, position_rtt);
+    // canController.setPosition(can_id_rtp_7, position_rtt);
     
     std::cout << "(decreased) Current Rotating Velocity: " << velocity_rtt << std::endl;
     std::cout << "(decreased) Current Velocity: " << velocity_fwd << std::endl;
@@ -257,6 +261,17 @@ void thread2_updatespeed(CanController CanController)
                     velocity_fwd -= 0.01f; // increase velocity
                     std::cout << "(increased) Current Velocity: " << velocity_fwd << std::endl;
                     break;
+
+                // rotation speed set
+                case 'D': // left arrow key
+                    velocity_rtt -= 0.01f; // decrease velocity
+                    std::cout << "(decreased) Current Rotating Velocity: " << velocity_rtt << std::endl;
+                    break;
+                case 'C': // right arrow key
+                    velocity_rtt += 0.01f; // decrease velocity
+                    std::cout << "(decreased) Current Rotating Velocity: " << velocity_rtt << std::endl;
+                    break;
+                
                 // emergency stop
                 case 'x': // right arrow key
                     velocity_fwd = 0.00f; // decrease velocity
@@ -266,12 +281,11 @@ void thread2_updatespeed(CanController CanController)
                     break;
             }
             // read current motor velocity in rpm
-            printf("1Current speed is %f \n",canController.wheel_velocity);
-            wheel_v = canController.wheel_velocity / 4.71 * 38 / 1000;
-            printf("flag");
+            printf("1 Current speed is %f \n",canController.wheel_velocity);
+            wheel_v = canController.wheel_velocity/ 4.71 * 38 / 1000;
             // calculate rotation speed of motor
             velocity_rtt = wheel_v / radius;
-
+            printf("Current rtt speed is %5f \n",velocity_rtt);
             // update steering speed
             canController.setRotateVelocity(can_id_rtt_5, velocity_rtt);
             canController.setRotateVelocity(can_id_rtt_6, velocity_rtt);
@@ -383,8 +397,10 @@ void keyboardcontroll() {
 int main()
 {
     CanController canController1;
-    std::thread t1(thread1_read(0x2051842,canController1));
-    std::thread t2(thread2_updatespeed(canController1));
+    std::thread t1(thread1_read,0x2051842,std::ref(canController1));
+    std::thread t2(thread2_updatespeed,std::ref(canController1));
+    t1.join();
+    t2.join();
 }
 
 // int main() {
