@@ -32,6 +32,34 @@ void floatToUnsignedChar(float floatValue, unsigned char* hex) {
     }
 }
 
+void UnsignedCharToFloat(float floatValue, unsigned char* hex) {
+    union {
+        float value;
+        unsigned char bytes[4];
+    } data;
+
+    data.bytes[3] = hex[3];
+    data.bytes[2] = hex[2];
+    data.bytes[1] = hex[1];
+    data.bytes[0] = hex[0];
+
+}
+
+float UnsignedCharToFloat_32(unsigned char hex1, unsigned char hex2,unsigned char hex3,unsigned char hex4) {
+    union {
+        float floatValue;
+        unsigned char bytes[4];
+    } data;
+
+    data.bytes[3] = hex1;
+	data.bytes[2] = hex2;
+	data.bytes[1] = hex3;
+	data.bytes[0] = hex4;
+
+	return data.floatValue;
+}
+
+
 // Convert 4-byte unsigned char array to hexadecimal number
 uint32_t unsignedCharToHex(const unsigned char* bytes) {
     uint32_t result = 0;

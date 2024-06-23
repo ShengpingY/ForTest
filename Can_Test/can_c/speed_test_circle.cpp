@@ -17,27 +17,23 @@
 #include <chrono>
 
 #include "keyboard.h"
-#include "./HexDecimal.h"
+
+#include "can_receive.h"
+
 class CanController {
 private:
     int s;
     struct sockaddr_can addr;
     struct ifreq ifr;
+    int s_read;
+    struct sockaddr_can addr_read;
+    struct ifreq ifr_read;
 
-    void floatToUnsignedChar(float floatValue, unsigned char* hex) {
-        union {
-            float value;
-            unsigned char bytes[4];
-        } data;
 
-        data.value = floatValue;
 
-        for (int i = 0; i < 4; ++i) {
-            hex[i] = data.bytes[3 - i];
-        }
-    }
 
 public:
+    float wheel_velocity;
     CanController() {
         const char *ifname = "can0";
 
@@ -63,6 +59,21 @@ public:
     ~CanController() {
         close(s);
     }
+
+    void floatToUnsignedChar(float floatValue, unsigned char* hex) {
+        union {
+            float value;
+            unsigned char bytes[4];
+        } data;
+
+        data.value = floatValue;
+
+        for (int i = 0; i < 4; ++i) {
+            hex[i] = data.bytes[3 - i];
+        }
+    }
+
+
     void send_Heartbeat(){
         int nbytes;
         struct can_frame frame_heartbeat;
@@ -93,7 +104,7 @@ public:
         // printf("\n");
     }
 
-
+    
     void setPosition(uint32_t can_id, float position) {
         // number of position representing the target position in rotations
         int nbytes;
@@ -121,6 +132,32 @@ public:
             exit(EXIT_FAILURE);
         }
 
+    }
+
+    float readonce_2_float(int canid){
+        float f_num;
+        int nbytes;
+        struct can_frame frame_rotate_read;
+
+        
+        nbytes = read(s, &frame_rotate_read, sizeof(struct can_frame));
+        if((frame_rotate_read.can_id &= ~CAN_EFF_FLAG) == canid){
+            if (nbytes < 0) {
+                perror("CAN Frame read error!");
+                return -1;
+            }
+            printf("Received CAN Frame -> CANID: 0x%X Data: ", frame_rotate_read.can_id &= ~CAN_EFF_FLAG);
+            for (int i = 0; i < frame_rotate_read.can_dlc; i++) {
+                printf("%02X ", frame_rotate_read.data[i]);
+            }
+            printf("\n");
+
+            // tranfer 32bit data to float number
+            f_num = UnsignedCharToFloat_32(frame_rotate_read.data[3],frame_rotate_read.data[2],frame_rotate_read.data[1],frame_rotate_read.data[0]);
+            
+            printf("transfered float value is :%f \n", f_num);
+        }
+        return f_num;
     }
 
     void setRotateVelocity(uint32_t can_id, float velocity) {
@@ -155,8 +192,101 @@ public:
         // }
         // printf("\n");
     }
+
+
+
 };
 
+void thread1_read(int canid,CanController CanController)
+{
+    while(1)
+    {
+        CanController.wheel_velocity = canController.readonce_2_float(canid);
+    }
+}
+
+void thread2_updatespeed(CanController CanController)
+{
+    Keyboard::initTermios();// initialize keyboard
+    float radius = 3;
+    float wheel_v;
+    float velocity_fwd = 0.0f;
+    float velocity_rtt = 0.0f;
+    float position_rtt = 0.0f;
+    uint32_t can_id_fwd_2 = 0x2050082; // Set your desired CAN ID here
+    uint32_t can_id_fwd_3 = 0x2050083; // Set your desired CAN ID here
+    uint32_t can_id_fwd_4 = 0x2050084; // Set your desired CAN ID here
+    uint32_t can_id_rtt_5 = 0x2050085; // Set your desired CAN ID here
+    uint32_t can_id_rtt_6 = 0x2050086; // Set your desired CAN ID here
+    uint32_t can_id_rtt_7 = 0x2050087; // Set your desired CAN ID here
+    uint32_t can_id_rtp_5 = 0x2050C85; // Set your desired CAN ID here
+    uint32_t can_id_rtp_6 = 0x2050C86; // Set your desired CAN ID here
+    uint32_t can_id_rtp_7 = 0x2050C87; // Set your desired CAN ID here
+    canController.send_Heartbeat();
+    canController.setRotateVelocity(can_id_fwd_2, velocity_fwd);
+    canController.setRotateVelocity(can_id_fwd_3, velocity_fwd);
+    canController.setRotateVelocity(can_id_fwd_4, velocity_fwd);
+    canController.setRotateVelocity(can_id_rtt_5, velocity_rtt);
+    canController.setRotateVelocity(can_id_rtt_6, velocity_rtt);
+    canController.setRotateVelocity(can_id_rtt_7, velocity_rtt);
+    canController.setPosition(can_id_rtp_5, position_rtt);
+    canController.setPosition(can_id_rtp_6, position_rtt);
+    canController.setPosition(can_id_rtp_7, position_rtt);
+    
+    std::cout << "(decreased) Current Rotating Velocity: " << velocity_rtt << std::endl;
+    std::cout << "(decreased) Current Velocity: " << velocity_fwd << std::endl;
+    
+
+    while(true) {
+        
+        canController.send_Heartbeat();
+        
+
+        if (Keyboard::kbhit()) { // ¼ì²éÊÇ·ñÓÐ°´¼üÊäÈë
+            char c = Keyboard::getch(); // ¶ÁÈ¡×Ö·û
+            switch(c) { // »ñÈ¡·½Ïò
+                case 'A': // UP arrow key
+                    // update velocity
+                    velocity_fwd += 0.01f; // increase velocity
+                    std::cout << "(increased) Current Velocity: " << velocity_fwd << std::endl;
+                    
+                    break;
+
+                case 'B': // DOWN arrow key
+                    // update velocity
+                    velocity_fwd -= 0.01f; // increase velocity
+                    std::cout << "(increased) Current Velocity: " << velocity_fwd << std::endl;
+                    break;
+                // emergency stop
+                case 'x': // right arrow key
+                    velocity_fwd = 0.00f; // decrease velocity
+                    std::cout << "(decreased) Current Velocity: " << velocity_fwd << std::endl;
+                    velocity_rtt = 0.00f; // decrease velocity
+                    std::cout << "(decreased) Current Rotating Velocity: " << velocity_rtt << std::endl;
+                    break;
+            }
+            // read current motor velocity in rpm
+            printf("1Current speed is %f \n",canController.wheel_velocity);
+            wheel_v = canController.wheel_velocity / 4.71 * 38 / 1000;
+            printf("flag");
+            // calculate rotation speed of motor
+            velocity_rtt = wheel_v / radius;
+
+            // update steering speed
+            canController.setRotateVelocity(can_id_rtt_5, velocity_rtt);
+            canController.setRotateVelocity(can_id_rtt_6, velocity_rtt);
+            canController.setRotateVelocity(can_id_rtt_7, velocity_rtt);
+            canController.setRotateVelocity(can_id_fwd_2, velocity_fwd);
+            canController.setRotateVelocity(can_id_fwd_3, velocity_fwd);
+            canController.setRotateVelocity(can_id_fwd_4, velocity_fwd);
+
+        }
+        // Sleep for 100 microseconds
+        std::this_thread::sleep_for(std::chrono::microseconds(500));
+        
+    }
+    Keyboard::resetTermios();
+}
 
 void keyboardcontroll() {
     Keyboard::initTermios();// initialize keyboard
@@ -250,115 +380,96 @@ void keyboardcontroll() {
     Keyboard::resetTermios();
     return;
 }
-int main() {
-    Keyboard::initTermios();// initialize keyboard
-    CanController canController;
-    float velocity_fwd = 0.0f;
-    float velocity_rtt = 0.0f;
-    float position_rtt = 0.0f;
-    uint32_t can_id_fwd_2 = 0x2050082; // Set your desired CAN ID here
-    uint32_t can_id_fwd_3 = 0x2050083; // Set your desired CAN ID here
-    uint32_t can_id_fwd_4 = 0x2050084; // Set your desired CAN ID here
-    uint32_t can_id_rtt_5 = 0x2050085; // Set your desired CAN ID here
-    uint32_t can_id_rtt_6 = 0x2050086; // Set your desired CAN ID here
-    uint32_t can_id_rtt_7 = 0x2050087; // Set your desired CAN ID here
-    uint32_t can_id_rtp_5 = 0x2050C85; // Set your desired CAN ID here
-    uint32_t can_id_rtp_6 = 0x2050C86; // Set your desired CAN ID here
-    uint32_t can_id_rtp_7 = 0x2050C87; // Set your desired CAN ID here
-    canController.send_Heartbeat();
-    canController.setRotateVelocity(can_id_fwd_2, velocity_fwd);
-    canController.setRotateVelocity(can_id_fwd_3, velocity_fwd);
-    canController.setRotateVelocity(can_id_fwd_4, velocity_fwd);
-    // canController.setRotateVelocity(can_id_rtt_5, velocity_rtt);
-    // canController.setRotateVelocity(can_id_rtt_6, velocity_rtt);
-    // canController.setRotateVelocity(can_id_rtt_7, velocity_rtt);
-    canController.setPosition(can_id_rtp_5, position_rtt);
-    canController.setPosition(can_id_rtp_6, position_rtt);
-    canController.setPosition(can_id_rtp_7, position_rtt);
+int main()
+{
+    CanController canController1;
+    std::thread t1(thread1_read(0x2051842,canController1));
+    std::thread t2(thread2_updatespeed(canController1));
+}
+
+// int main() {
+//     double radius = 3;
+//     Keyboard::initTermios();// initialize keyboard
+//     CanController canController;
+//     float velocity_fwd = 0.0f;
+//     float velocity_rtt = 0.0f;
+//     float position_rtt = 0.0f;
+//     uint32_t can_id_fwd_2 = 0x2050082; // Set your desired CAN ID here
+//     uint32_t can_id_fwd_3 = 0x2050083; // Set your desired CAN ID here
+//     uint32_t can_id_fwd_4 = 0x2050084; // Set your desired CAN ID here
+//     uint32_t can_id_rtt_5 = 0x2050085; // Set your desired CAN ID here
+//     uint32_t can_id_rtt_6 = 0x2050086; // Set your desired CAN ID here
+//     uint32_t can_id_rtt_7 = 0x2050087; // Set your desired CAN ID here
+//     uint32_t can_id_rtp_5 = 0x2050C85; // Set your desired CAN ID here
+//     uint32_t can_id_rtp_6 = 0x2050C86; // Set your desired CAN ID here
+//     uint32_t can_id_rtp_7 = 0x2050C87; // Set your desired CAN ID here
+//     canController.send_Heartbeat();
+//     canController.setRotateVelocity(can_id_fwd_2, velocity_fwd);
+//     canController.setRotateVelocity(can_id_fwd_3, velocity_fwd);
+//     canController.setRotateVelocity(can_id_fwd_4, velocity_fwd);
+//     canController.setRotateVelocity(can_id_rtt_5, velocity_rtt);
+//     canController.setRotateVelocity(can_id_rtt_6, velocity_rtt);
+//     canController.setRotateVelocity(can_id_rtt_7, velocity_rtt);
+//     canController.setPosition(can_id_rtp_5, position_rtt);
+//     canController.setPosition(can_id_rtp_6, position_rtt);
+//     canController.setPosition(can_id_rtp_7, position_rtt);
     
-    std::cout << "(decreased) Current Rotating Velocity: " << velocity_rtt << std::endl;
-    std::cout << "(decreased) Current Velocity: " << velocity_fwd << std::endl;
+//     std::cout << "(decreased) Current Rotating Velocity: " << velocity_rtt << std::endl;
+//     std::cout << "(decreased) Current Velocity: " << velocity_fwd << std::endl;
     
-    while(true) {
-        canController.send_Heartbeat();
+
+//     while(true) {
+        
+//         canController.send_Heartbeat();
         
 
-        if (Keyboard::kbhit()) { // ¼ì²éÊÇ·ñÓÐ°´¼üÊäÈë
-            char c = Keyboard::getch(); // ¶ÁÈ¡×Ö·û
+//         if (Keyboard::kbhit()) { // ¼ì²éÊÇ·ñÓÐ°´¼üÊäÈë
+//             char c = Keyboard::getch(); // ¶ÁÈ¡×Ö·û
+//             float wheel_v = canController.readonce_2_float(0x2051842);
+//             switch(c) { // »ñÈ¡·½Ïò
+//                 case 'A': // UP arrow key
+//                     // update velocity
+//                     velocity_fwd += 0.01f; // increase velocity
+//                     std::cout << "(increased) Current Velocity: " << velocity_fwd << std::endl;
+                    
+//                     break;
 
-            switch(c) { // »ñÈ¡·½Ïò
-                case 'A': // UP arrow key
-                    velocity_fwd += 0.001f; // increase velocity
-                    std::cout << "(increased) Current Velocity: " << velocity_fwd << std::endl;
-                    break;
-                case 'B': // DOWN arrow key
-                    velocity_fwd -= 0.001f; // decrease velocity
-                    std::cout << "(decreased) Current Velocity: " << velocity_fwd << std::endl;
-                    break;
+//                 case 'B': // DOWN arrow key
+//                     // update velocity
+//                     velocity_fwd -= 0.01f; // increase velocity
+//                     std::cout << "(increased) Current Velocity: " << velocity_fwd << std::endl;
+//                     break;
+//                 // emergency stop
+//                 case 'x': // right arrow key
+//                     velocity_fwd = 0.00f; // decrease velocity
+//                     std::cout << "(decreased) Current Velocity: " << velocity_fwd << std::endl;
+//                     velocity_rtt = 0.00f; // decrease velocity
+//                     std::cout << "(decreased) Current Rotating Velocity: " << velocity_rtt << std::endl;
+//                     break;
+//             }
+//             // read current motor velocity in rpm
+//             wheel_v = canController.readonce_2_float(0x2051842);
+//             printf("1Current speed is %f \n",wheel_v);
+//             wheel_v = wheel_v / 4.71 * 38 / 1000;
+//             printf("flag");
+//             // calculate rotation speed of motor
+//             velocity_rtt = wheel_v / radius;
 
-                // rotation position set
-                case 'D': // left arrow key
-                    position_rtt -= 0.8f; // decrease velocity
-                    std::cout << "(decreased) Current Rotating Position: " << position_rtt << std::endl;
-                    break;
-                case 'C': // right arrow key
-                    position_rtt += 0.8f; // decrease velocity
-                    std::cout << "(decreased) Current Rotating Position: " << position_rtt << std::endl;
-                    break;
+//             // update steering speed
+//             canController.setRotateVelocity(can_id_rtt_5, velocity_rtt);
+//             canController.setRotateVelocity(can_id_rtt_6, velocity_rtt);
+//             canController.setRotateVelocity(can_id_rtt_7, velocity_rtt);
 
-                // // rotation speed set
-                // case 'D': // left arrow key
-                //     velocity_rtt -= 0.01f; // decrease velocity
-                //     std::cout << "(decreased) Current Rotating Velocity: " << velocity_rtt << std::endl;
-                //     break;
-                // case 'C': // right arrow key
-                //     velocity_rtt += 0.01f; // decrease velocity
-                //     std::cout << "(decreased) Current Rotating Velocity: " << velocity_rtt << std::endl;
-                //     break;
+//             canController.setRotateVelocity(can_id_fwd_2, velocity_fwd);
+//             canController.setRotateVelocity(can_id_fwd_3, velocity_fwd);
+//             canController.setRotateVelocity(can_id_fwd_4, velocity_fwd);
 
-                // emergency stop
-                case 'x': // right arrow key
-                    velocity_fwd = 0.00f; // decrease velocity
-                    std::cout << "(decreased) Current Velocity: " << velocity_fwd << std::endl;
-                    velocity_rtt = 0.00f; // decrease velocity
-                    std::cout << "(decreased) Current Rotating Velocity: " << velocity_rtt << std::endl;
-                    break;
-            }
-            // canController.setRotateVelocity(can_id_fwd, velocity_fwd);
-            // canController.setRotateVelocity(can_id_rtt, velocity_rtt);
-            canController.setRotateVelocity(can_id_fwd_2, velocity_fwd);
-            canController.setRotateVelocity(can_id_fwd_3, velocity_fwd);
-            canController.setRotateVelocity(can_id_fwd_4, velocity_fwd);
-            // canController.setRotateVelocity(can_id_rtt_5, velocity_rtt);
-            // canController.setRotateVelocity(can_id_rtt_6, velocity_rtt);
-            // canController.setRotateVelocity(can_id_rtt_7, velocity_rtt);
-            canController.setPosition(can_id_rtp_5, position_rtt);
-            canController.setPosition(can_id_rtp_6, position_rtt);
-            canController.setPosition(can_id_rtp_7, position_rtt);
-        }
-        // Sleep for 100 microseconds
-        std::this_thread::sleep_for(std::chrono::microseconds(500));
-    }
-    Keyboard::resetTermios();
-    return 0;
-}
-// int main() {
-//     CanController canController;
-//     int i = 0;
-// 	float k = 0;
-
-//     uint32_t can_id = 0x2050082; // Set your desired CAN ID here
-
-//     while(i < 1000000000) {
-//         // Perform other operations if needed
-
-//         canController.setRotateVelocity(can_id, -1.00000000f+k);
-
-//         // Sleep for 500 microseconds
-//         std::this_thread::sleep_for(std::chrono::microseconds(100));
-//         i++;
-// 		k = k + 0.00002;
+//         }
+//         // Sleep for 100 microseconds
+//         std::this_thread::sleep_for(std::chrono::microseconds(500));
+        
 //     }
-
+//     Keyboard::resetTermios();
 //     return 0;
 // }
+
